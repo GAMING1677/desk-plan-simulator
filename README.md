@@ -4,7 +4,19 @@
 
 ## 起動
 
-Node.js 22.13 以上で `npm ci`、`npm run dev` を実行してください。
+プロジェクトのルートは `D:\develop\desk-plan-simulator` です。VS Code では `desk-plan-simulator.code-workspace` を開いてください。Codex にプロジェクトとして追加する場合も、このフォルダーを選択してください。
+
+Node.js 22.13 以上で、プロジェクトのルートから `npm ci`、`npm run dev` を実行してください。既に依存関係がある場合は `npm run dev` だけで起動できます。
+
+## ファイル構成
+
+- `app/simulator.tsx`: 操作画面と三面図
+- `app/globals.css`: 画面のスタイル
+- `lib/desk-model.ts`: 座標、寸法、重なり判定
+- `lib/size-presets.ts`: 用紙・モニター・ノートPCのサイズ辞書
+- `lib/layout-file.ts`: `.layout.json` の保存と読み込み
+- `public/`: アイコンとリンクカード画像（SVG原稿とPNG）
+- `src/main.tsx`: アプリの起動処理
 
 ## ビルドと公開
 
