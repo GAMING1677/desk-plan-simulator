@@ -11,7 +11,7 @@ import {
 } from "@/lib/desk-model";
 import { FrontScene } from "@/components/front-scene";
 import { FRONT_WIDTH, FRONT_HEIGHT, fitFrontView, projectFront, unprojectFront } from "@/lib/front-projection";
-import { inventoryFileName, makeInventoryMarkdown } from "@/lib/inventory-file";
+import { makeInventoryMarkdown } from "@/lib/inventory-file";
 import { SIZE_PRESETS } from "@/lib/size-presets";
 import { layoutFileName, makeLayoutFile, readLayoutFile } from "@/lib/layout-file";
 
@@ -95,6 +95,9 @@ export default function Simulator() {
   const [selectedId, setSelectedId] = useState(DEFAULT_ITEMS[0]?.id ?? "");
   const [adding, setAdding] = useState(false);
   const [itemsCollapsed, setItemsCollapsed] = useState(false);
+  const [inventoryMarkdown, setInventoryMarkdown] = useState("");
+  const [inventoryCopyState, setInventoryCopyState] = useState<"idle" | "copying" | "success" | "error">("idle");
+  const inventoryDialogRef = useRef<HTMLDialogElement>(null);
   const [measures, setMeasures] = useState(true);
   const [frontZoom, setFrontZoom] = useState(100);
   const [frontOffset, setFrontOffset] = useState({ x: 0, y: 0 });
@@ -281,15 +284,18 @@ export default function Simulator() {
     }
   }
   function exportInventory() {
-    const blob = new Blob([makeInventoryMarkdown(itemsRef.current)], { type: "text/markdown;charset=utf-8" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = inventoryFileName(layoutName);
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setInventoryMarkdown(makeInventoryMarkdown(itemsRef.current));
+    setInventoryCopyState("idle");
+    inventoryDialogRef.current?.showModal();
+  }
+  async function copyInventory() {
+    setInventoryCopyState("copying");
+    try {
+      await navigator.clipboard.writeText(inventoryMarkdown);
+      setInventoryCopyState("success");
+    } catch {
+      setInventoryCopyState("error");
+    }
   }
   async function saveLayout(mode: "download" | "pick") {
     if (!layoutName.trim()) { setSaveError(true); return; }
@@ -522,5 +528,12 @@ export default function Simulator() {
         </> : <p className="empty-state">図または一覧からオブジェクトを選択してください。</p>}
       </aside>
     </div>
+    <dialog ref={inventoryDialogRef} className="inventory-dialog" aria-labelledby="inventory-title">
+      <h2 id="inventory-title">持ち物を書き出す</h2>
+      <p>Discordに貼り付けると、そのまま番号付き箇条書きになります。</p>
+      <textarea aria-label="持ち物のMarkdown" readOnly value={inventoryMarkdown} placeholder="持ち物がありません" onFocus={(event) => event.currentTarget.select()}/>
+      <p role="status">{inventoryCopyState === "success" ? "コピーしました" : inventoryCopyState === "error" ? "コピーできませんでした。内容を選択してコピーしてください。" : ""}</p>
+      <div className="inventory-actions"><Button variant="outline" onClick={() => inventoryDialogRef.current?.close()}>閉じる</Button><Button disabled={!inventoryMarkdown || inventoryCopyState === "copying"} onClick={() => void copyInventory()}><Copy size={15}/>{inventoryCopyState === "copying" ? "コピー中…" : "クリップボードにコピー"}</Button></div>
+    </dialog>
   </main>;
 }
