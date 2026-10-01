@@ -10,13 +10,15 @@ import {
   rounded, supportFor, updateItem, worldPosition, type Desk, type Item,
 } from "@/lib/desk-model";
 import { SIZE_PRESETS } from "@/lib/size-presets";
-import { LAYOUT_FILE_NAME, makeLayoutFile, readLayoutFile } from "@/lib/layout-file";
+import { layoutFileName, makeLayoutFile, readLayoutFile } from "@/lib/layout-file";
 
 type View = "top" | "front" | "side";
 type BrowserTool = { name: string; title: string; description: string; inputSchema: object; annotations: { readOnlyHint: boolean }; execute: (input: unknown) => unknown | Promise<unknown> };
 type ModelContext = { registerTool: (tool: BrowserTool, options: { signal: AbortSignal }) => void | Promise<void> };
 type Draft = { name: string; supportId: string | null; kind: Item["kind"]; width: number; depth: number; height: number; z: number };
 type DragState = { id: string; view: View; pointerX: number; pointerY: number; itemX: number; itemY: number; itemZ: number; linked: boolean };
+type SaveFileHandle = { createWritable: () => Promise<{ write: (data: Blob) => Promise<void>; close: () => Promise<void> }> };
+type SavePickerWindow = Window & { showSaveFilePicker?: (options: { suggestedName: string; types: { description: string; accept: Record<string, string[]> }[] }) => Promise<SaveFileHandle> };
 
 const S = 4;
 const LEFT = 96;
@@ -86,6 +88,10 @@ export default function Simulator() {
   const [draft, setDraft] = useState<Draft>({ name: "新しいアイテム", supportId: null, kind: "box", width: 30, depth: 20, height: 15, z: 0 });
   const [copyState, setCopyState] = useState<"idle" | "copying" | "success" | "error">("idle");
   const [savedSnapshot, setSavedSnapshot] = useState<string | null>(null);
+  const [layoutName, setLayoutName] = useState("desk-plan");
+  const [saveOpen, setSaveOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState(false);
   const [loadState, setLoadState] = useState<"idle" | "loaded" | "error">("idle");
   const [loadError, setLoadError] = useState("");
   const [invalidDesk, setInvalidDesk] = useState(false);
@@ -241,18 +247,37 @@ export default function Simulator() {
       setCopyState("error");
     }
   }
-  function saveLayout() {
+  async function saveLayout(mode: "download" | "pick") {
+    if (!layoutName.trim()) { setSaveError(true); return; }
+    setSaving(true);
+    setSaveError(false);
     const snapshot = JSON.stringify({ desk: deskRef.current, items: itemsRef.current });
-    const blob = new Blob([`${JSON.stringify(makeLayoutFile(deskRef.current, itemsRef.current), null, 2)}\n`], { type: "application/json" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = LAYOUT_FILE_NAME;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
-    setSavedSnapshot(snapshot);
+    const filename = layoutFileName(layoutName);
+    const blob = new Blob([`${JSON.stringify(makeLayoutFile(deskRef.current, itemsRef.current, layoutName.trim()), null, 2)}\n`], { type: "application/json" });
+    try {
+      const pickerWindow = window as SavePickerWindow;
+      if (mode === "pick" && pickerWindow.showSaveFilePicker) {
+        const handle = await pickerWindow.showSaveFilePicker({ suggestedName: filename, types: [{ description: "レイアウト JSON", accept: { "application/json": [".json"] } }] });
+        const writer = await handle.createWritable();
+        await writer.write(blob);
+        await writer.close();
+      } else {
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      }
+      setSavedSnapshot(snapshot);
+      setSaveOpen(false);
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError")) setSaveError(true);
+    } finally {
+      setSaving(false);
+    }
   }
   async function loadLayout(file: File) {
     try {
@@ -263,6 +288,8 @@ export default function Simulator() {
       itemsRef.current = imported.items;
       setItems(imported.items);
       setSelectedId(imported.items[0]?.id ?? "");
+      setLayoutName(imported.name ?? file.name.replace(/\.layout\.json$/i, ""));
+      setSaveOpen(false);
       setAdding(false);
       setDraft((current) => ({ ...current, supportId: null }));
       setInvalidItemId(null);
@@ -336,7 +363,9 @@ export default function Simulator() {
   return <main className="shell">
     <header className="header">
       <div className="brand"><span className="brand-icon"><Monitor size={20}/></span><span>DESK PLAN<small>机上レイアウト</small></span></div>
-      <div className="header-actions"><span>単位 cm</span><Button variant="outline" size="sm" onClick={saveLayout} title={`${LAYOUT_FILE_NAME} を保存`}><Download size={15}/>{savedSnapshot !== null && savedSnapshot === JSON.stringify({ desk, items }) ? "保存しました" : "配置を保存"}</Button><Button variant="outline" size="sm" className={loadState === "error" ? "layout-load-error" : ""} onClick={() => layoutInputRef.current?.click()} title={loadState === "error" ? loadError : ".layout.json を読み込む"}><Upload size={15}/>{loadState === "loaded" ? "読み込みました" : loadState === "error" ? "読み込み失敗" : "配置を読み込む"}</Button><input ref={layoutInputRef} className="layout-file-input" type="file" accept=".layout.json,application/json" aria-label=".layout.jsonファイルを選択" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void loadLayout(file); }}/><Button variant="outline" size="sm" onClick={() => { deskRef.current = { ...DEFAULT_DESK }; setDesk(deskRef.current); itemsRef.current = DEFAULT_ITEMS; setItems(DEFAULT_ITEMS); setSelectedId(DEFAULT_ITEMS[0].id); setDraft((current) => ({ ...current, supportId: null })); setInvalidItemId(null); setInvalidDesk(false); setSavedSnapshot(null); setLoadState("idle"); }}><RotateCcw size={15}/>初期配置に戻す</Button></div>
+      <div className="header-actions"><span>単位 cm</span><Button variant="outline" size="sm" onClick={() => { setSaveOpen((open) => !open); setSaveError(false); }}><Download size={15}/>{savedSnapshot !== null && savedSnapshot === JSON.stringify({ desk, items }) ? "保存しました" : "配置を保存"}</Button><Button variant="outline" size="sm" className={loadState === "error" ? "layout-load-error" : ""} onClick={() => layoutInputRef.current?.click()} title={loadState === "error" ? loadError : ".layout.json を読み込む"}><Upload size={15}/>{loadState === "loaded" ? "読み込みました" : loadState === "error" ? "読み込み失敗" : "配置を読み込む"}</Button><input ref={layoutInputRef} className="layout-file-input" type="file" accept=".layout.json,application/json" aria-label=".layout.jsonファイルを選択" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void loadLayout(file); }}/><Button variant="outline" size="sm" onClick={() => { deskRef.current = { ...DEFAULT_DESK }; setDesk(deskRef.current); itemsRef.current = DEFAULT_ITEMS; setItems(DEFAULT_ITEMS); setSelectedId(DEFAULT_ITEMS[0].id); setDraft((current) => ({ ...current, supportId: null })); setInvalidItemId(null); setInvalidDesk(false); setSavedSnapshot(null); setSaveOpen(false); setLoadState("idle"); }}><RotateCcw size={15}/>初期配置に戻す</Button>
+        {saveOpen && <div className={`save-panel ${saveError ? "invalid" : ""}`} role="dialog" aria-label="配置を保存"><label>レイアウト名<Input autoFocus aria-label="レイアウト名" value={layoutName} onChange={(event) => { setLayoutName(event.target.value); setSaveError(false); }} onKeyDown={(event) => { if (event.key === "Enter") void saveLayout("download"); }}/></label><small>{layoutFileName(layoutName)}</small><p>保存先の選択に対応していないブラウザでは、通常のダウンロードになります。</p><div><Button variant="outline" size="sm" onClick={() => setSaveOpen(false)}>キャンセル</Button><Button variant="outline" size="sm" disabled={saving} onClick={() => void saveLayout("download")}>ダウンロード</Button><Button size="sm" disabled={saving} onClick={() => void saveLayout("pick")}>{saving ? "保存中…" : "保存先を選ぶ"}</Button></div></div>}
+      </div>
     </header>
     <div className="workspace">
       <aside className="sidebar">

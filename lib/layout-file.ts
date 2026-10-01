@@ -1,20 +1,25 @@
 import { POSTER_PANEL_DEPTH, placementIssue, type Desk, type Item } from "./desk-model";
 
 export const LAYOUT_FILE_NAME = "desk-plan.layout.json";
+export function layoutFileName(name: string) {
+  const stem = name.trim().replace(/\.layout\.json$/i, "").replace(/[<>:"/\\|?*\u0000-\u001f]/g, "_").replace(/[. ]+$/, "").slice(0, 80);
+  return `${stem || "desk-plan"}.layout.json`;
+}
 const FORMAT = "desk-plan-layout";
 const VERSION = 1;
 const KINDS = new Set<Item["kind"]>(["box", "monitor", "poster", "laptop"]);
 
-type LayoutFile = { format: typeof FORMAT; version: typeof VERSION; desk: Desk; items: Item[] };
+type LayoutFile = { format: typeof FORMAT; version: typeof VERSION; name?: string; desk: Desk; items: Item[] };
 const record = (value: unknown): value is Record<string, unknown> => typeof value === "object" && value !== null && !Array.isArray(value);
 const finite = (value: unknown): value is number => typeof value === "number" && Number.isFinite(value);
 
-export function makeLayoutFile(desk: Desk, items: Item[]): LayoutFile {
-  return { format: FORMAT, version: VERSION, desk: { ...desk }, items: items.map((item) => ({ ...item })) };
+export function makeLayoutFile(desk: Desk, items: Item[], name?: string): LayoutFile {
+  return { format: FORMAT, version: VERSION, ...(name ? { name } : {}), desk: { ...desk }, items: items.map((item) => ({ ...item })) };
 }
 
-export function readLayoutFile(value: unknown): { desk: Desk; items: Item[] } {
+export function readLayoutFile(value: unknown): { desk: Desk; items: Item[]; name?: string } {
   if (!record(value) || value.format !== FORMAT || value.version !== VERSION) throw new Error("対応していないレイアウトファイルです。");
+  if (value.name !== undefined && (typeof value.name !== "string" || !value.name.trim() || value.name.length > 120)) throw new Error("レイアウト名が正しくありません。");
   if (!record(value.desk) || ![value.desk.width, value.desk.depth, value.desk.height].every((size) => finite(size) && size > 0 && size <= 10000)) throw new Error("机の寸法が正しくありません。");
   const desk: Desk = { width: value.desk.width as number, depth: value.desk.depth as number, height: value.desk.height as number };
   if (!Array.isArray(value.items) || value.items.length > 1000) throw new Error("オブジェクトの一覧を読み込めません。");
@@ -49,5 +54,5 @@ export function readLayoutFile(value: unknown): { desk: Desk; items: Item[] } {
   }
   const issue = placementIssue(items, new Set(items.map((item) => item.id)), desk);
   if (issue) throw new Error(issue);
-  return { desk, items };
+  return { desk, items, name: value.name as string | undefined };
 }
