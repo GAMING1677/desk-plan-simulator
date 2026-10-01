@@ -25,3 +25,5 @@
 @media(max-width:750px){.lower-views{gap:18px}.side-diagram{min-width:360px}.lower-views .side-diagram{max-width:none}}
 
 .front-pannable{cursor:grab;touch-action:none;user-select:none}.front-pannable.is-panning{cursor:grabbing}
+
+.items-toggle{display:flex;align-items:center;justify-content:space-between;width:100%;border:0;padding:0;background:none;color:inherit;font:inherit;cursor:pointer}.item-list[hidden]{display:none}.canvas-header{margin-bottom:20px}

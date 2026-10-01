@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState, type PointerEvent } from "react";
-import { ArrowLeftRight, Box, Copy, Download, Laptop, Layers3, Monitor, Move, Presentation, Plus, RotateCcw, Trash2, Upload } from "lucide-react";
+import { ArrowLeftRight, Box, ChevronDown, Copy, Download, Laptop, Layers3, List, Monitor, Presentation, Plus, RotateCcw, Trash2, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { NativeSelect, NativeSelectOptGroup, NativeSelectOption } from "@/components/ui/native-select";
@@ -10,7 +10,8 @@ import {
   rounded, supportFor, updateItem, worldPosition, type Desk, type Item,
 } from "@/lib/desk-model";
 import { FrontScene } from "@/components/front-scene";
-import { FRONT_WIDTH, FRONT_HEIGHT, frontScale } from "@/lib/front-projection";
+import { FRONT_WIDTH, FRONT_HEIGHT, projectFront, unprojectFront } from "@/lib/front-projection";
+import { inventoryFileName, makeInventoryMarkdown } from "@/lib/inventory-file";
 import { SIZE_PRESETS } from "@/lib/size-presets";
 import { layoutFileName, makeLayoutFile, readLayoutFile } from "@/lib/layout-file";
 
@@ -50,6 +51,15 @@ function itemColor(item: Item, selected: boolean, invalid: boolean) {
 
 function frontViewPng(source: SVGSVGElement): Promise<Blob> {
   const svg = source.cloneNode(true) as SVGSVGElement;
+  const renderedCanvas = source.querySelector("canvas");
+  const foreignObject = svg.querySelector("foreignObject");
+  if (renderedCanvas && foreignObject) {
+    const raster = document.createElementNS("http://www.w3.org/2000/svg", "image");
+    raster.setAttribute("x", "0"); raster.setAttribute("y", "0");
+    raster.setAttribute("width", String(FRONT_WIDTH)); raster.setAttribute("height", String(FRONT_HEIGHT));
+    raster.setAttribute("href", renderedCanvas.toDataURL("image/png"));
+    foreignObject.replaceWith(raster);
+  }
   svg.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   svg.setAttribute("width", String(FHD_WIDTH));
   svg.setAttribute("height", String(FHD_HEIGHT));
@@ -82,8 +92,9 @@ function frontViewPng(source: SVGSVGElement): Promise<Blob> {
 export default function Simulator() {
   const [desk, setDesk] = useState<Desk>({ ...DEFAULT_DESK });
   const [items, setItems] = useState<Item[]>(DEFAULT_ITEMS);
-  const [selectedId, setSelectedId] = useState(DEFAULT_ITEMS[0].id);
+  const [selectedId, setSelectedId] = useState(DEFAULT_ITEMS[0]?.id ?? "");
   const [adding, setAdding] = useState(false);
+  const [itemsCollapsed, setItemsCollapsed] = useState(false);
   const [measures, setMeasures] = useState(true);
   const [frontZoom, setFrontZoom] = useState(100);
   const [frontOffset, setFrontOffset] = useState({ x: 0, y: 0 });
@@ -204,8 +215,8 @@ export default function Simulator() {
     return () => controller.abort();
   }, []);
 
-  function point(event: PointerEvent<SVGGElement | SVGSVGElement>) {
-    const svg = event.currentTarget instanceof SVGSVGElement ? event.currentTarget : event.currentTarget.ownerSVGElement!;
+  function point(event: PointerEvent<SVGGElement | SVGSVGElement | HTMLCanvasElement>) {
+    const svg = event.currentTarget instanceof SVGSVGElement ? event.currentTarget : event.currentTarget instanceof HTMLCanvasElement ? event.currentTarget.closest("svg")! : event.currentTarget.ownerSVGElement!;
     const p = svg.createSVGPoint();
     p.x = event.clientX; p.y = event.clientY;
     return p.matrixTransform(svg.getScreenCTM()!.inverse());
@@ -230,7 +241,7 @@ export default function Simulator() {
     setFrontPanning(false);
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
-  function beginDrag(event: PointerEvent<SVGGElement>, item: Item, view: View) {
+  function beginDrag(event: PointerEvent<SVGGElement | HTMLCanvasElement>, item: Item, view: View) {
     const p = point(event);
     dragging.current = { id: item.id, view, pointerX: p.x, pointerY: p.y, itemX: item.x, itemY: item.y, itemZ: item.z, linked: Boolean(item.supportId) };
     setSelectedId(item.id);
@@ -268,6 +279,17 @@ export default function Simulator() {
     } catch {
       setCopyState("error");
     }
+  }
+  function exportInventory() {
+    const blob = new Blob([makeInventoryMarkdown(itemsRef.current)], { type: "text/markdown;charset=utf-8" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = inventoryFileName(layoutName);
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
   async function saveLayout(mode: "download" | "pick") {
     if (!layoutName.trim()) { setSaveError(true); return; }
@@ -336,18 +358,24 @@ export default function Simulator() {
     setInvalidDesk(false);
     return true;
   }
-  function moveDrag(event: PointerEvent<SVGGElement>) {
+  function moveDrag(event: PointerEvent<SVGGElement | HTMLCanvasElement>) {
     const active = dragging.current;
     if (!active) return;
     const p = point(event);
-    const draggedItem = itemsRef.current.find((item) => item.id === active.id);
-    const scale = active.view === "front" && draggedItem
-      ? frontScale(deskRef.current, draggedItem, worldPosition(itemsRef.current, draggedItem), frontZoom) : 1;
-    const dx = (p.x - active.pointerX) / (S * scale);
+    const dx = (p.x - active.pointerX) / S;
     const dy = (p.y - active.pointerY) / S;
-    const change = active.view === "front" ? { x: rounded(active.itemX + dx) }
-      : active.view === "side" ? { y: rounded(active.itemY + dx), ...(active.linked ? {} : { z: rounded(Math.max(0, active.itemZ - dy)) }) }
-      : { x: rounded(active.itemX + dx), y: rounded(active.itemY + dy) };
+    let change: Partial<Item>;
+    const draggedItem = itemsRef.current.find((item) => item.id === active.id);
+    if (active.view === "front" && draggedItem) {
+      const world = worldPosition(itemsRef.current, draggedItem);
+      const origin = { x: world.x + active.itemX - draggedItem.x, y: world.y + itemDepth(draggedItem), z: world.z + active.itemZ - draggedItem.z };
+      const start = projectFront(deskRef.current, origin, frontZoom);
+      const next = unprojectFront(deskRef.current, { x: start.x + p.x - active.pointerX, y: start.y + p.y - active.pointerY }, origin.y, frontZoom);
+      change = { x: rounded(active.itemX + next.x - origin.x), ...(active.linked ? {} : { z: rounded(Math.max(0, active.itemZ + next.z - origin.z)) }) };
+    } else {
+      change = active.view === "side" ? { y: rounded(active.itemY + dx), ...(active.linked ? {} : { z: rounded(Math.max(0, active.itemZ - dy)) }) }
+        : { x: rounded(active.itemX + dx), y: rounded(active.itemY + dy) };
+    }
     applyCandidate(updateItem(itemsRef.current, active.id, change, deskRef.current), active.id);
   }
   function addItem() {
@@ -365,7 +393,7 @@ export default function Simulator() {
     setDraft((current) => current.supportId === selected.id ? { ...current, supportId: null } : current);
   }
   function dragHandlers(item: Item, view: View) {
-    return { onPointerDown: (event: PointerEvent<SVGGElement>) => beginDrag(event, item, view), onPointerMove: moveDrag, onPointerUp: () => { dragging.current = null; }, onPointerCancel: () => { dragging.current = null; } };
+    return { onPointerDown: (event: PointerEvent<SVGGElement | HTMLCanvasElement>) => beginDrag(event, item, view), onPointerMove: moveDrag, onPointerUp: () => { dragging.current = null; }, onPointerCancel: () => { dragging.current = null; } };
   }
   function choosePreset(id: string) {
     setPresetId(id);
@@ -388,7 +416,7 @@ export default function Simulator() {
   return <main className="shell">
     <header className="header">
       <div className="brand"><span className="brand-icon"><Monitor size={20}/></span><span>DESK PLAN<small>机上レイアウト</small></span></div>
-      <div className="header-actions"><span>単位 cm</span><Button variant="outline" size="sm" onClick={() => { setSaveOpen((open) => !open); setSaveError(false); }}><Download size={15}/>{savedSnapshot !== null && savedSnapshot === JSON.stringify({ desk, items }) ? "保存しました" : "配置を保存"}</Button><Button variant="outline" size="sm" className={loadState === "error" ? "layout-load-error" : ""} onClick={() => layoutInputRef.current?.click()} title={loadState === "error" ? loadError : ".layout.json を読み込む"}><Upload size={15}/>{loadState === "loaded" ? "読み込みました" : loadState === "error" ? "読み込み失敗" : "配置を読み込む"}</Button><input ref={layoutInputRef} className="layout-file-input" type="file" accept=".layout.json,application/json" aria-label=".layout.jsonファイルを選択" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void loadLayout(file); }}/><Button variant="outline" size="sm" onClick={() => { deskRef.current = { ...DEFAULT_DESK }; setDesk(deskRef.current); itemsRef.current = DEFAULT_ITEMS; setItems(DEFAULT_ITEMS); setSelectedId(DEFAULT_ITEMS[0].id); setDraft((current) => ({ ...current, supportId: null })); setInvalidItemId(null); setInvalidDesk(false); setSavedSnapshot(null); setSaveOpen(false); setLoadState("idle"); }}><RotateCcw size={15}/>初期配置に戻す</Button>
+      <div className="header-actions"><span>単位 cm</span><Button variant="outline" size="sm" onClick={exportInventory} title="全オブジェクトをMarkdown形式で書き出す" aria-label="持ち物リストを書き出す"><List size={15}/>持ち物を書き出す</Button><Button variant="outline" size="sm" onClick={() => { setSaveOpen((open) => !open); setSaveError(false); }}><Download size={15}/>{savedSnapshot !== null && savedSnapshot === JSON.stringify({ desk, items }) ? "保存しました" : "配置を保存"}</Button><Button variant="outline" size="sm" className={loadState === "error" ? "layout-load-error" : ""} onClick={() => layoutInputRef.current?.click()} title={loadState === "error" ? loadError : ".layout.json を読み込む"}><Upload size={15}/>{loadState === "loaded" ? "読み込みました" : loadState === "error" ? "読み込み失敗" : "配置を読み込む"}</Button><input ref={layoutInputRef} className="layout-file-input" type="file" accept=".layout.json,application/json" aria-label=".layout.jsonファイルを選択" onChange={(event) => { const file = event.currentTarget.files?.[0]; event.currentTarget.value = ""; if (file) void loadLayout(file); }}/><Button variant="outline" size="sm" onClick={() => { deskRef.current = { ...DEFAULT_DESK }; setDesk(deskRef.current); itemsRef.current = DEFAULT_ITEMS; setItems(DEFAULT_ITEMS); setSelectedId(DEFAULT_ITEMS[0]?.id ?? ""); setDraft((current) => ({ ...current, supportId: null })); setInvalidItemId(null); setInvalidDesk(false); setSavedSnapshot(null); setSaveOpen(false); setLoadState("idle"); }}><RotateCcw size={15}/>初期配置に戻す</Button>
         {saveOpen && <div className={`save-panel ${saveError ? "invalid" : ""}`} role="dialog" aria-label="配置を保存"><label>レイアウト名<Input autoFocus aria-label="レイアウト名" value={layoutName} onChange={(event) => { setLayoutName(event.target.value); setSaveError(false); }} onKeyDown={(event) => { if (event.key === "Enter") void saveLayout("download"); }}/></label><small>{layoutFileName(layoutName)}</small><p>保存先の選択に対応していないブラウザでは、通常のダウンロードになります。</p><div><Button variant="outline" size="sm" onClick={() => setSaveOpen(false)}>キャンセル</Button><Button variant="outline" size="sm" disabled={saving} onClick={() => void saveLayout("download")}>ダウンロード</Button><Button size="sm" disabled={saving} onClick={() => void saveLayout("pick")}>{saving ? "保存中…" : "保存先を選ぶ"}</Button></div></div>}
       </div>
     </header>
@@ -396,8 +424,8 @@ export default function Simulator() {
       <aside className="sidebar">
         <div className="sidebar-head"><strong>レイアウト</strong><span>{items.length} アイテム</span></div>
         <div className={`desk-summary ${invalidDesk ? "invalid" : ""}`}><small>DESK SIZE</small><strong>幅 {cm(desk.width)}</strong><span>奥行き {cm(desk.depth)} · 高さ {cm(desk.height)}</span><div className="desk-fields">{([ ["width", "幅"], ["depth", "奥行き"], ["height", "高さ"] ] as const).map(([key, label]) => <label key={`${key}-${desk[key]}`}>{label}<Input aria-label={`机の${label}`} type="number" min="0.1" max="10000" step="0.1" defaultValue={desk[key]} onBlur={(event) => { if (!changeDesk(key, Number(event.currentTarget.value))) event.currentTarget.value = String(deskRef.current[key]); }} onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); if (event.key === "Escape") { event.currentTarget.value = String(deskRef.current[key]); event.currentTarget.blur(); } }}/></label>)}</div></div>
-        <h2 className="section-title">置いているもの</h2>
-        <div className="item-list">{items.map((item, index) => <button key={item.id} className={`item-row ${selectedId === item.id ? "active" : ""} ${invalidItemId === item.id ? "invalid" : ""}`} onClick={() => { setSelectedId(item.id); setInvalidItemId(null); }}>
+        <h2 className="section-title"><button className="items-toggle" aria-expanded={!itemsCollapsed} aria-controls="placed-items" onClick={() => setItemsCollapsed((value) => !value)}>置いているもの<ChevronDown size={16} style={{ transform: itemsCollapsed ? "rotate(-90deg)" : undefined }}/></button></h2>
+        <div id="placed-items" className="item-list" hidden={itemsCollapsed}>{items.map((item, index) => <button key={item.id} className={`item-row ${selectedId === item.id ? "active" : ""} ${invalidItemId === item.id ? "invalid" : ""}`} onClick={() => { setSelectedId(item.id); setInvalidItemId(null); }}>
           <span className="item-icon">{appearanceIcon(item.kind, 18)}</span>
           <span className="item-copy"><strong>{item.name}</strong><small>{item.kind === "poster" ? `幅 ${cm(item.width)} × 高さ ${cm(item.height)}` : `${cm(item.width)} × ${cm(item.depth)} × ${cm(item.height)}`}</small><em>{item.supportId ? `${supportFor(items, item)?.name || "机"} の上` : item.z > 0 ? `独立配置 · 高さ ${cm(item.z)}` : "机の上"}</em></span>
           <span className="item-number">{String(index + 1).padStart(2, "0")}</span>
@@ -436,9 +464,8 @@ export default function Simulator() {
 
       <section className="canvas-area" aria-label="机の三面図">
         <div className="canvas-header"><div><small>WORKSPACE / 01</small><h1>机上レイアウト</h1></div><label className="measure-toggle"><input type="checkbox" checked={measures} onChange={(event) => setMeasures(event.target.checked)}/>寸法を表示</label></div>
-        <p className="hint"><Move size={16}/>上面図で左右と奥行き、正面図で左右、側面図で奥行きと高さを調整できます。物の上に載せた場合は高さが連動します。</p>
         <div className="views">
-          <div className="view-card"><div className="view-heading"><span>01</span><div><strong>上面図</strong><small>上から見た配置 · 幅 × 奥行き</small></div></div>
+          <div className="view-card"><div className="view-heading"><span>01</span><div><strong>上面図</strong></div></div>
             <svg className="diagram" viewBox={topViewBox} role="img" aria-label="机とオブジェクトの上面図">
               <defs><pattern id="grid" width="40" height="40" patternUnits="userSpaceOnUse"><path d="M40 0H0V40" fill="none" stroke="#dce6ec" strokeWidth="1"/></pattern></defs>
               <rect x={LEFT} y={TOP} width={desk.width*S} height={desk.depth*S} rx="3" fill="#f1f7fa" stroke="#9bafbc" strokeWidth="2"/>
@@ -455,16 +482,13 @@ export default function Simulator() {
             </svg>
           </div>
           <div className="lower-views">
-            <div className="view-card"><div className="view-heading"><span>02</span><div><strong>正面図</strong><small>中央・手前1m・天板の高さ · 奥行き補正は弱め</small></div><Button variant="outline" size="sm" className={`front-copy-button ${copyState === "error" ? "copy-error" : ""}`} disabled={copyState === "copying"} onClick={copyFrontView} aria-live="polite"><Copy size={15}/>{copyState === "copying" ? "作成中…" : copyState === "success" ? "コピーしました" : copyState === "error" ? "コピー失敗・再試行" : "FHDでコピー"}</Button></div>
-              <label className="hint">拡大率 {frontZoom}% <input aria-label="正面図の拡大率" type="range" min="50" max="200" step="5" value={frontZoom} onChange={(event) => setFrontZoom(Number(event.target.value))}/><span>空白をドラッグで移動</span><Button variant="outline" size="sm" onClick={() => setFrontOffset({ x: 0, y: 0 })}>位置を戻す</Button></label>
-              <svg ref={frontSvgRef} className={`diagram elevation-diagram front-pannable ${frontPanning ? "is-panning" : ""}`} onPointerDown={beginFrontPan} onPointerMove={moveFrontPan} onPointerUp={endFrontPan} onPointerCancel={endFrontPan} onLostPointerCapture={endFrontPan} viewBox={`0 0 ${FRONT_WIDTH} ${FRONT_HEIGHT}`} role="img" aria-label={`机の手前1mの中央から拡大率${frontZoom}パーセントで個別投影した正面図`}>
-                <g transform={`translate(${frontOffset.x} ${frontOffset.y})`}>
-                <FrontScene desk={desk} items={items} zoom={frontZoom} selectedId={selectedId} invalidItemId={invalidItemId} measures={measures} handlers={(item) => dragHandlers(item,"front")}/>
-                </g>
-                {measures && <text x={FRONT_WIDTH/2} y={FRONT_HEIGHT-20} textAnchor="middle" className="desk-dimension">机の幅 {cm(desk.width)} · 視点距離 100 cm · 拡大率 {frontZoom}%</text>}
+            <div className="view-card"><div className="view-heading"><span>02</span><div><strong>正面図</strong></div><Button variant="outline" size="sm" className={`front-copy-button ${copyState === "error" ? "copy-error" : ""}`} disabled={copyState === "copying"} onClick={copyFrontView} aria-live="polite"><Copy size={15}/>{copyState === "copying" ? "作成中…" : copyState === "success" ? "コピーしました" : copyState === "error" ? "コピー失敗・再試行" : "FHDでコピー"}</Button></div>
+              <label className="hint">拡大率 {frontZoom}% <input aria-label="正面図の拡大率" type="range" min="50" max="200" step="5" value={frontZoom} onChange={(event) => setFrontZoom(Number(event.target.value))}/><Button variant="outline" size="sm" onClick={() => setFrontOffset({ x: 0, y: 0 })}>位置を戻す</Button></label>
+              <svg ref={frontSvgRef} className={`diagram elevation-diagram front-pannable ${frontPanning ? "is-panning" : ""}`} onPointerDown={beginFrontPan} onPointerMove={moveFrontPan} onPointerUp={endFrontPan} onPointerCancel={endFrontPan} onLostPointerCapture={endFrontPan} viewBox={`0 0 ${FRONT_WIDTH} ${FRONT_HEIGHT}`} role="img" aria-label={`床から150cm、机の手前3mの中央から拡大率${frontZoom}パーセントで3D表示した正面図`}>
+                <FrontScene desk={desk} items={items} zoom={frontZoom} offset={frontOffset} selectedId={selectedId} invalidItemId={invalidItemId} measures={measures} handlers={(item) => dragHandlers(item,"front")}/>
               </svg>
             </div>
-            <div className="view-card"><div className="view-heading"><span>03</span><div><strong>側面図</strong><small>右から見た配置 · 奥行き × 高さ</small></div></div>
+            <div className="view-card"><div className="view-heading"><span>03</span><div><strong>側面図</strong></div></div>
               <svg className="diagram elevation-diagram side-diagram" viewBox={`${sideViewX} 0 ${sideViewRight-sideViewX} ${elevationViewHeight}`} role="img" aria-label="机とオブジェクトの側面図">
                 <rect x={SIDE_LEFT} y={baseline} width={desk.depth*S} height="15" fill="#b3c5cf" stroke="#7a92a1"/>
                 <text x={SIDE_LEFT} y={baseline+28} className="edge-note">奥</text><text x={SIDE_LEFT+desk.depth*S-20} y={baseline+28} className="edge-note">手前</text>

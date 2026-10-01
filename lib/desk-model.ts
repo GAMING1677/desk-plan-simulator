@@ -35,10 +35,7 @@ export function monitorShape(item: Item) {
   return { panelDepth, panelStart, footWidth, footDepth, footStart, footHeight, stemWidth, stemDepth, stemY, screenBottom };
 }
 
-export const DEFAULT_ITEMS: Item[] = [
-  { id: "monitor-1", name: "27インチ モニター 1", kind: "monitor", supportId: null, x: 22, y: 7, z: 0, width: 59.8, depth: 20, height: 43 },
-  { id: "monitor-2", name: "27インチ モニター 2", kind: "monitor", supportId: null, x: 98, y: 7, z: 0, width: 59.8, depth: 20, height: 43 },
-];
+export const DEFAULT_ITEMS: Item[] = [];
 
 export const rounded = (n: number) => Math.round(n * 10) / 10;
 export const cm = (n: number) => `${rounded(n)} cm`;
