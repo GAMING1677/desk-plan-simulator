@@ -86,6 +86,9 @@ export default function Simulator() {
   const [adding, setAdding] = useState(false);
   const [measures, setMeasures] = useState(true);
   const [frontZoom, setFrontZoom] = useState(100);
+  const [frontOffset, setFrontOffset] = useState({ x: 0, y: 0 });
+  const [frontPanning, setFrontPanning] = useState(false);
+  const frontPan = useRef<{ pointerId: number; x: number; y: number; offsetX: number; offsetY: number } | null>(null);
   const [invalidItemId, setInvalidItemId] = useState<string | null>(null);
   const [presetId, setPresetId] = useState("custom");
   const [draft, setDraft] = useState<Draft>({ name: "新しいアイテム", supportId: null, kind: "box", width: 30, depth: 20, height: 15, z: 0 });
@@ -201,11 +204,31 @@ export default function Simulator() {
     return () => controller.abort();
   }, []);
 
-  function point(event: PointerEvent<SVGGElement>) {
-    const svg = event.currentTarget.ownerSVGElement!;
+  function point(event: PointerEvent<SVGGElement | SVGSVGElement>) {
+    const svg = event.currentTarget instanceof SVGSVGElement ? event.currentTarget : event.currentTarget.ownerSVGElement!;
     const p = svg.createSVGPoint();
     p.x = event.clientX; p.y = event.clientY;
     return p.matrixTransform(svg.getScreenCTM()!.inverse());
+  }
+  function beginFrontPan(event: PointerEvent<SVGSVGElement>) {
+    if (event.button !== 0 || !event.isPrimary || (event.target as Element).closest(".draggable")) return;
+    const p = point(event);
+    frontPan.current = { pointerId: event.pointerId, x: p.x, y: p.y, offsetX: frontOffset.x, offsetY: frontOffset.y };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    event.preventDefault();
+    setFrontPanning(true);
+  }
+  function moveFrontPan(event: PointerEvent<SVGSVGElement>) {
+    const pan = frontPan.current;
+    if (!pan || pan.pointerId !== event.pointerId) return;
+    const p = point(event);
+    setFrontOffset({ x: pan.offsetX + p.x - pan.x, y: pan.offsetY + p.y - pan.y });
+  }
+  function endFrontPan(event: PointerEvent<SVGSVGElement>) {
+    if (frontPan.current?.pointerId !== event.pointerId) return;
+    frontPan.current = null;
+    setFrontPanning(false);
+    if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
   }
   function beginDrag(event: PointerEvent<SVGGElement>, item: Item, view: View) {
     const p = point(event);
@@ -433,9 +456,11 @@ export default function Simulator() {
           </div>
           <div className="lower-views">
             <div className="view-card"><div className="view-heading"><span>02</span><div><strong>正面図</strong><small>中央・手前1m・天板の高さ · 奥行き補正は弱め</small></div><Button variant="outline" size="sm" className={`front-copy-button ${copyState === "error" ? "copy-error" : ""}`} disabled={copyState === "copying"} onClick={copyFrontView} aria-live="polite"><Copy size={15}/>{copyState === "copying" ? "作成中…" : copyState === "success" ? "コピーしました" : copyState === "error" ? "コピー失敗・再試行" : "FHDでコピー"}</Button></div>
-              <label className="hint">拡大率 {frontZoom}% <input aria-label="正面図の拡大率" type="range" min="50" max="200" step="5" value={frontZoom} onChange={(event) => setFrontZoom(Number(event.target.value))}/><span>100%：標準サイズ</span></label>
-              <svg ref={frontSvgRef} className="diagram elevation-diagram" viewBox={`0 0 ${FRONT_WIDTH} ${FRONT_HEIGHT}`} role="img" aria-label={`机の手前1mの中央から拡大率${frontZoom}パーセントで個別投影した正面図`}>
+              <label className="hint">拡大率 {frontZoom}% <input aria-label="正面図の拡大率" type="range" min="50" max="200" step="5" value={frontZoom} onChange={(event) => setFrontZoom(Number(event.target.value))}/><span>空白をドラッグで移動</span><Button variant="outline" size="sm" onClick={() => setFrontOffset({ x: 0, y: 0 })}>位置を戻す</Button></label>
+              <svg ref={frontSvgRef} className={`diagram elevation-diagram front-pannable ${frontPanning ? "is-panning" : ""}`} onPointerDown={beginFrontPan} onPointerMove={moveFrontPan} onPointerUp={endFrontPan} onPointerCancel={endFrontPan} onLostPointerCapture={endFrontPan} viewBox={`0 0 ${FRONT_WIDTH} ${FRONT_HEIGHT}`} role="img" aria-label={`机の手前1mの中央から拡大率${frontZoom}パーセントで個別投影した正面図`}>
+                <g transform={`translate(${frontOffset.x} ${frontOffset.y})`}>
                 <FrontScene desk={desk} items={items} zoom={frontZoom} selectedId={selectedId} invalidItemId={invalidItemId} measures={measures} handlers={(item) => dragHandlers(item,"front")}/>
+                </g>
                 {measures && <text x={FRONT_WIDTH/2} y={FRONT_HEIGHT-20} textAnchor="middle" className="desk-dimension">机の幅 {cm(desk.width)} · 視点距離 100 cm · 拡大率 {frontZoom}%</text>}
               </svg>
             </div>
