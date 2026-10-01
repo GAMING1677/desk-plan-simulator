@@ -9,6 +9,8 @@ import {
   DEFAULT_DESK, DEFAULT_ITEMS, MONITOR_SCREEN_FRACTION, POSTER_PANEL_DEPTH, cm, descendantIds, findOpenPlacement, itemDepth, itemTop, monitorShape, placeOn, placementIssue, removeItem,
   rounded, supportFor, updateItem, worldPosition, type Desk, type Item,
 } from "@/lib/desk-model";
+import { FrontScene } from "@/components/front-scene";
+import { FRONT_WIDTH, FRONT_HEIGHT, frontScale } from "@/lib/front-projection";
 import { SIZE_PRESETS } from "@/lib/size-presets";
 import { layoutFileName, makeLayoutFile, readLayoutFile } from "@/lib/layout-file";
 
@@ -83,6 +85,7 @@ export default function Simulator() {
   const [selectedId, setSelectedId] = useState(DEFAULT_ITEMS[0].id);
   const [adding, setAdding] = useState(false);
   const [measures, setMeasures] = useState(true);
+  const [frontZoom, setFrontZoom] = useState(100);
   const [invalidItemId, setInvalidItemId] = useState<string | null>(null);
   const [presetId, setPresetId] = useState("custom");
   const [draft, setDraft] = useState<Draft>({ name: "新しいアイテム", supportId: null, kind: "box", width: 30, depth: 20, height: 15, z: 0 });
@@ -104,10 +107,6 @@ export default function Simulator() {
   const topItems = useMemo(() => [...items].sort((a, b) => {
     const first = worldPosition(items, a), second = worldPosition(items, b);
     return first.z + itemTop(a) - second.z - itemTop(b);
-  }), [items]);
-  const frontItems = useMemo(() => [...items].sort((a, b) => {
-    const first = worldPosition(items, a), second = worldPosition(items, b);
-    return first.y + itemDepth(a) - second.y - itemDepth(b);
   }), [items]);
   const sideItems = useMemo(() => [...items].sort((a, b) => {
     const first = worldPosition(items, a), second = worldPosition(items, b);
@@ -318,7 +317,10 @@ export default function Simulator() {
     const active = dragging.current;
     if (!active) return;
     const p = point(event);
-    const dx = (p.x - active.pointerX) / S;
+    const draggedItem = itemsRef.current.find((item) => item.id === active.id);
+    const scale = active.view === "front" && draggedItem
+      ? frontScale(deskRef.current, draggedItem, worldPosition(itemsRef.current, draggedItem), frontZoom) : 1;
+    const dx = (p.x - active.pointerX) / (S * scale);
     const dy = (p.y - active.pointerY) / S;
     const change = active.view === "front" ? { x: rounded(active.itemX + dx) }
       : active.view === "side" ? { y: rounded(active.itemY + dx), ...(active.linked ? {} : { z: rounded(Math.max(0, active.itemZ - dy)) }) }
@@ -430,15 +432,11 @@ export default function Simulator() {
             </svg>
           </div>
           <div className="lower-views">
-            <div className="view-card"><div className="view-heading"><span>02</span><div><strong>正面図</strong><small>手前から見た配置 · 幅 × 高さ</small></div><Button variant="outline" size="sm" className={`front-copy-button ${copyState === "error" ? "copy-error" : ""}`} disabled={copyState === "copying"} onClick={copyFrontView} aria-live="polite"><Copy size={15}/>{copyState === "copying" ? "作成中…" : copyState === "success" ? "コピーしました" : copyState === "error" ? "コピー失敗・再試行" : "FHDでコピー"}</Button></div>
-              <svg ref={frontSvgRef} className="diagram elevation-diagram" viewBox={`${frontViewX} 0 ${frontViewRight-frontViewX} ${elevationViewHeight}`} role="img" aria-label="机とオブジェクトの正面図">
-                <rect x={LEFT} y={baseline} width={desk.width*S} height="15" fill="#b3c5cf" stroke="#7a92a1"/>
-                {frontItems.map((item) => { const world=worldPosition(items,item), x=LEFT+world.x*S, w=item.width*S, h=item.height*S, y=baseline-(world.z+itemTop(item))*S, bottom=baseline-world.z*S, monitor=monitorShape(item), active=item.id===selectedId, color=itemColor(item,active,item.id===invalidItemId); return <g key={item.id} className="draggable" {...dragHandlers(item,"front")}>
-                  {item.kind === "monitor" ? <><rect x={x} y={y} width={w} height={h*MONITOR_SCREEN_FRACTION} rx="5" fill={color.fill} stroke={color.stroke} strokeWidth={active?2.5:1.5}/><rect x={x+7} y={y+7} width={Math.max(w-14,2)} height={Math.max(h*MONITOR_SCREEN_FRACTION-14,2)} rx="2" fill="#193243"/><rect x={x+w/2-monitor.stemWidth*S/2} y={y+h*MONITOR_SCREEN_FRACTION} width={monitor.stemWidth*S} height={Math.max(bottom-monitor.footHeight*S-y-h*MONITOR_SCREEN_FRACTION,0)} fill="#8299a7"/><rect x={x+(item.width-monitor.footWidth)*S/2} y={bottom-monitor.footHeight*S} width={monitor.footWidth*S} height={monitor.footHeight*S} rx="2" fill="#8299a7" stroke={color.stroke} strokeWidth={active?2.5:1.5}/></> : item.kind === "poster" ? <><rect x={x} y={y} width={w} height={h} rx="2" fill={color.fill} stroke={color.stroke} strokeWidth={active?2.5:1.5}/><rect x={x+Math.min(7,w*.1)} y={y+Math.min(7,h*.1)} width={Math.max(w-Math.min(14,w*.2),2)} height={Math.max(h-Math.min(14,h*.2),2)} fill="#fffaf0" stroke="#c79e70" strokeWidth="1"/><circle cx={x+w*.2} cy={y+h*.12} r="2.5" fill="#c65e53"/><circle cx={x+w*.8} cy={y+h*.12} r="2.5" fill="#4d8ea1"/></> : item.kind === "laptop" ? <><rect x={x+w*.05} y={y} width={w*.9} height={h*.83} rx="4" fill="#314958" stroke={color.stroke} strokeWidth={active?2.5:1.5}/><rect x={x+w*.085} y={y+h*.045} width={w*.83} height={h*.72} rx="2" fill="#50798e"/><rect x={x} y={bottom-h*.12} width={w} height={h*.12} rx="2" fill={color.fill} stroke={color.stroke} strokeWidth={active?2.5:1.5}/></> : <rect x={x} y={y} width={w} height={h} rx="4" fill={color.fill} stroke={color.stroke} strokeWidth={active?2.5:1.5}/>}
-                  <text x={x+w/2} y={item.kind==="monitor"?y+30:y+h/2+5} textAnchor="middle" className={item.kind==="monitor"?"screen-label":"item-label"}>{cleanName(item.name)}</text>
-                  {measures && <><text x={x+w/2} y={y-8} textAnchor="middle" className="object-dimension">{cm(item.width)}</text><text x={x+w+7} y={y+h/2+4} className="object-dimension">{cm(item.height)}</text></>}
-                </g>; })}
-                {measures && <><line x1={LEFT} y1={baseline+33} x2={LEFT+desk.width*S} y2={baseline+33} className="measure-line"/><text x={LEFT+desk.width*S/2} y={baseline+54} textAnchor="middle" className="desk-dimension">幅 {cm(desk.width)}</text></>}
+            <div className="view-card"><div className="view-heading"><span>02</span><div><strong>正面図</strong><small>中央・手前1m・天板の高さ · 奥行き補正は弱め</small></div><Button variant="outline" size="sm" className={`front-copy-button ${copyState === "error" ? "copy-error" : ""}`} disabled={copyState === "copying"} onClick={copyFrontView} aria-live="polite"><Copy size={15}/>{copyState === "copying" ? "作成中…" : copyState === "success" ? "コピーしました" : copyState === "error" ? "コピー失敗・再試行" : "FHDでコピー"}</Button></div>
+              <label className="hint">拡大率 {frontZoom}% <input aria-label="正面図の拡大率" type="range" min="50" max="200" step="5" value={frontZoom} onChange={(event) => setFrontZoom(Number(event.target.value))}/><span>100%：標準サイズ</span></label>
+              <svg ref={frontSvgRef} className="diagram elevation-diagram" viewBox={`0 0 ${FRONT_WIDTH} ${FRONT_HEIGHT}`} role="img" aria-label={`机の手前1mの中央から拡大率${frontZoom}パーセントで個別投影した正面図`}>
+                <FrontScene desk={desk} items={items} zoom={frontZoom} selectedId={selectedId} invalidItemId={invalidItemId} measures={measures} handlers={(item) => dragHandlers(item,"front")}/>
+                {measures && <text x={FRONT_WIDTH/2} y={FRONT_HEIGHT-20} textAnchor="middle" className="desk-dimension">机の幅 {cm(desk.width)} · 視点距離 100 cm · 拡大率 {frontZoom}%</text>}
               </svg>
             </div>
             <div className="view-card"><div className="view-heading"><span>03</span><div><strong>側面図</strong><small>右から見た配置 · 奥行き × 高さ</small></div></div>
