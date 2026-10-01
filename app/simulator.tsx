@@ -10,7 +10,7 @@ import {
   rounded, supportFor, updateItem, worldPosition, type Desk, type Item,
 } from "@/lib/desk-model";
 import { FrontScene } from "@/components/front-scene";
-import { FRONT_WIDTH, FRONT_HEIGHT, projectFront, unprojectFront } from "@/lib/front-projection";
+import { FRONT_WIDTH, FRONT_HEIGHT, fitFrontView, projectFront, unprojectFront } from "@/lib/front-projection";
 import { inventoryFileName, makeInventoryMarkdown } from "@/lib/inventory-file";
 import { SIZE_PRESETS } from "@/lib/size-presets";
 import { layoutFileName, makeLayoutFile, readLayoutFile } from "@/lib/layout-file";
@@ -483,7 +483,7 @@ export default function Simulator() {
           </div>
           <div className="lower-views">
             <div className="view-card"><div className="view-heading"><span>02</span><div><strong>正面図</strong></div><Button variant="outline" size="sm" className={`front-copy-button ${copyState === "error" ? "copy-error" : ""}`} disabled={copyState === "copying"} onClick={copyFrontView} aria-live="polite"><Copy size={15}/>{copyState === "copying" ? "作成中…" : copyState === "success" ? "コピーしました" : copyState === "error" ? "コピー失敗・再試行" : "FHDでコピー"}</Button></div>
-              <label className="hint">拡大率 {frontZoom}% <input aria-label="正面図の拡大率" type="range" min="50" max="200" step="5" value={frontZoom} onChange={(event) => setFrontZoom(Number(event.target.value))}/><Button variant="outline" size="sm" onClick={() => setFrontOffset({ x: 0, y: 0 })}>位置を戻す</Button></label>
+              <label className="hint">拡大率 {frontZoom}% <input aria-label="正面図の拡大率" type="range" min="1" max="200" step="1" value={frontZoom} onChange={(event) => setFrontZoom(Number(event.target.value))}/><Button variant="outline" size="sm" onClick={() => { const fit = fitFrontView(desk, items); setFrontZoom(fit.zoom); setFrontOffset(fit.offset); }}>全体を表示</Button></label>
               <svg ref={frontSvgRef} className={`diagram elevation-diagram front-pannable ${frontPanning ? "is-panning" : ""}`} onPointerDown={beginFrontPan} onPointerMove={moveFrontPan} onPointerUp={endFrontPan} onPointerCancel={endFrontPan} onLostPointerCapture={endFrontPan} viewBox={`0 0 ${FRONT_WIDTH} ${FRONT_HEIGHT}`} role="img" aria-label={`床から150cm、机の手前3mの中央から拡大率${frontZoom}パーセントで3D表示した正面図`}>
                 <FrontScene desk={desk} items={items} zoom={frontZoom} offset={frontOffset} selectedId={selectedId} invalidItemId={invalidItemId} measures={measures} handlers={(item) => dragHandlers(item,"front")}/>
               </svg>

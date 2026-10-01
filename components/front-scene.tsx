@@ -25,6 +25,7 @@ export function FrontScene({ desk, items, zoom, offset, selectedId, invalidItemI
   useEffect(() => {
     const renderer=rendererRef.current;
     if (!renderer) return;
+    renderer.setSize(FRONT_WIDTH,FRONT_HEIGHT,false);
     const scene=new Scene();
     const geometries: (BoxGeometry | EdgesGeometry)[]=[];
     const materials: (MeshLambertMaterial | LineBasicMaterial)[]=[];
