@@ -11,5 +11,15 @@
     "types": ["vite/client"],
     "paths": { "@/*": ["./*"] }
   },
-  "include": ["app", "components", "lib", "src", "vite.config.ts"]
+  "include": [
+    "app",
+    "components",
+    "features",
+    "lib",
+    "src",
+    "tests",
+    "vite.config.ts",
+    "vitest.config.ts",
+    "playwright.config.ts"
+  ]
 }

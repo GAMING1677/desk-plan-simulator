@@ -1,0 +1,80 @@
+name: Quality and deploy
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main, "codex/**", "chore/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Build and all tests
+    runs-on: windows-latest
+    timeout-minutes: 20
+    env:
+      E2E_PREVIEW: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run test:install
+      - run: npm run build
+      - name: Check specification HTML is up to date
+        run: |
+          npm run docs:spec
+          git diff --exit-code -- docs/behavior-spec.html docs/test-plan.html
+      - run: npm test
+      - name: Upload tested build
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-failures
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  deploy:
+    name: Deploy tested build
+    needs: quality
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-dist
+          path: dist
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=desk-plan-simulator-git --branch=main
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}
