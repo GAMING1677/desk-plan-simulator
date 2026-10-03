@@ -5,6 +5,9 @@ const localBrowsers = resolve(".cache/playwright");
 if (existsSync(localBrowsers))
   process.env.PLAYWRIGHT_BROWSERS_PATH ??= localBrowsers;
 export default defineConfig({
+  snapshotPathTemplate: process.env.GITHUB_ACTIONS
+    ? "{testDir}/{testFilePath}-snapshots/{arg}-windows-ci{ext}"
+    : undefined,
   testDir: "tests/e2e",
   fullyParallel: false,
   workers: 2,

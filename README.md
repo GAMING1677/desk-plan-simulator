@@ -31,11 +31,13 @@ Node.js 22.13 以上で、プロジェクトのルートから `npm ci`、`npm r
 
 人間向け仕様は [docs/behavior-spec.md](docs/behavior-spec.md) です。動作と境界値を記載し、対応するテストIDを載せています。具体的な期待値は各テストに置き、仕様は独立して編集します。文書の変更後は `npm run docs:spec` で [HTML](docs/behavior-spec.html) を更新してください。既存の `docs/test-plan.html` も同じ仕様へ更新します。
 
-動作を変更した際は対応するテストと仕様を両方修正し、`npm test` と `npm run build` を実行します。画像比較は同じOS・ブラウザ・画面サイズで確認し、差分を見てから基準画像を更新してください。現在の基準画像はWindows版Chromiumです。
+動作を変更した際は対応するテストと仕様を両方修正し、`npm test` と `npm run build` を実行します。画像比較は同じOS・ブラウザ・画面サイズで確認し、差分を見てから基準画像を更新してください。基準画像はローカルWindows用とGitHubのWindows Server 2025用を分けます。CIのvisual-candidatesは目視レビュー用で、生成しただけでは検証成功になりません。
 
 ## ビルドと公開
 
-`npm run build` で静的ファイルを `dist/` に作成します。[GitHub Actions](.github/workflows/quality-and-deploy.yml) がビルドと全テストを実行し、mainへのpushで検証に成功した場合だけ、その実行で検証した `dist/` をCloudflare Pagesへ公開します。PR・作業ブランチ・手動実行では検証だけを行います。
+`npm run build` で静的ファイルを `dist/` に作成します。[GitHub Actions](.github/workflows/quality-and-deploy.yml) のトリガーはPRとマージキューだけです。PRの更新とマージキュー投入時にビルド・全テストを実行します。作業ブランチへのpushと手動起動のトリガーはありません。
+
+PRがmainへマージされたとき、同じPRリビジョンの成功した検証からdistを取得し、検証時とマージ後のソース全体の一致を確認して公開します。未検証・失敗・取消・ソース不一致・成果物期限切れでは公開しません。main保護では「Build and all tests」を必須にし、最新のmainに対する検証を要求します。
 
 E2Eは `E2E_PREVIEW=1` を指定して本番成果物を確認します。画像比較のOSを既存の基準とそろえるため、検証ジョブはWindows、公開ジョブはLinuxを使います。[仕様とE2Eの対応](docs/e2e-coverage.md) を参照してください。
 

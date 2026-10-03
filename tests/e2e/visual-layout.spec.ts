@@ -8,7 +8,7 @@ for (const [name, width, height] of [
   test(`E2E-VISUAL-${name} 表示・操作到達・画像比較`, async ({ page }) => {
     await page.setViewportSize({ width, height });
     await start(page);
-    await expect(page).toHaveScreenshot(`${name}-empty.png`, {
+    await expect.soft(page).toHaveScreenshot(`${name}-empty.png`, {
       fullPage: true,
     });
     await load(page, [
@@ -29,7 +29,7 @@ for (const [name, width, height] of [
         height: 20,
       }),
     ]);
-    await expect(page).toHaveScreenshot(`${name}-objects.png`, {
+    await expect.soft(page).toHaveScreenshot(`${name}-objects.png`, {
       fullPage: true,
     });
     expect(
@@ -39,7 +39,7 @@ for (const [name, width, height] of [
     ).toBe(true);
     await page.getByRole("button", { name: "配置を保存" }).click();
     await expect(page.getByLabel("レイアウト名")).toBeFocused();
-    await expect(page).toHaveScreenshot(`${name}-save-panel.png`, {
+    await expect.soft(page).toHaveScreenshot(`${name}-save-panel.png`, {
       fullPage: true,
     });
     await page.getByRole("button", { name: "キャンセル" }).click();
@@ -47,7 +47,7 @@ for (const [name, width, height] of [
     await expect(
       page.getByRole("dialog", { name: "持ち物を書き出す" }),
     ).toBeVisible();
-    await expect(page).toHaveScreenshot(`${name}-inventory.png`, {
+    await expect.soft(page).toHaveScreenshot(`${name}-inventory.png`, {
       fullPage: true,
     });
     await page.getByRole("button", { name: "閉じる" }).click();
