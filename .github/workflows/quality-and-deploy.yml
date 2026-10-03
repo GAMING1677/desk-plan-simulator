@@ -1,0 +1,120 @@
+name: Quality and deploy
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review, closed]
+  merge_group:
+    types: [checks_requested]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: quality-${{ github.event.pull_request.number || github.ref }}-${{ github.event.action }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Build and all tests
+    if: github.event.action != 'closed'
+    runs-on: windows-2025
+    timeout-minutes: 20
+    env:
+      E2E_PREVIEW: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+          cache: npm
+      - run: npm ci
+      - run: npm run test:install
+      - run: npm run build
+      - name: Check specification HTML is up to date
+        run: |
+          npm run docs:spec
+          git diff --exit-code -- docs/behavior-spec.html docs/test-plan.html
+      - run: npm test
+      - name: Record tested source tree
+        run: |
+          New-Item -ItemType Directory -Force .cache | Out-Null
+          git rev-parse 'HEAD^{tree}' | Set-Content .cache/tested-tree.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tested-tree
+          path: .cache/tested-tree.txt
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload tested build
+        uses: actions/upload-artifact@v4
+        with:
+          name: tested-dist
+          path: dist/
+          if-no-files-found: error
+          retention-days: 7
+      - name: Upload failure evidence
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-failures
+          path: |
+            test-results/
+            playwright-report/
+          if-no-files-found: ignore
+          retention-days: 7
+
+  deploy:
+    name: Deploy tested build
+    if: github.event_name == 'pull_request' && github.event.action == 'closed' && github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "22"
+      - name: Find successful tests for this PR revision
+        id: tested
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const head = context.payload.pull_request.head.sha;
+            const { data } = await github.rest.actions.listWorkflowRuns({
+              owner, repo, workflow_id: 'quality-and-deploy.yml',
+              event: 'pull_request', head_sha: head, status: 'success', per_page: 100
+            });
+            const run = data.workflow_runs.find(run => run.id !== context.runId);
+            if (!run) throw new Error('No successful tests exist for this PR revision. Deployment stopped.');
+            core.setOutput('run-id', run.id);
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-tree
+          path: .cache
+          run-id: ${{ steps.tested.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Verify merged content is exactly what was tested
+        run: |
+          tested=$(tr -d '\r\n' < .cache/tested-tree.txt)
+          merged=$(git rev-parse 'HEAD^{tree}')
+          test "$tested" = "$merged" || { echo 'Merged content differs from tested content. Deployment stopped.'; exit 1; }
+      - uses: actions/download-artifact@v4
+        with:
+          name: tested-dist
+          path: dist
+          run-id: ${{ steps.tested.outputs.run-id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Deploy to Cloudflare Pages
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy dist --project-name=desk-plan-simulator-git --branch=main
+          gitHubToken: ${{ secrets.GITHUB_TOKEN }}

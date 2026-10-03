@@ -47,6 +47,25 @@ export function supportFor(items: Item[], item: Item): Item | undefined {
   return items.find((candidate) => candidate.id === item.supportId);
 }
 
+/** Validate the complete support chain before resolving coordinates or committing an edit. */
+export function supportIssue(items: Item[], itemId: string | null, supportId: string | null): string | null {
+  if (supportId === null) return null;
+  if (typeof supportId !== "string" || !supportId) return "載せ先を正しく指定してください。";
+  if (supportId === itemId) return "自分自身を載せ先にはできません。";
+  if (itemId && descendantIds(items, itemId).has(supportId)) return "子や孫のオブジェクトを載せ先にはできません。";
+  const seen = new Set<string>();
+  let currentId: string | null = supportId;
+  while (currentId !== null) {
+    if (seen.has(currentId) || currentId === itemId) return "載せ先の関係が循環しています。";
+    seen.add(currentId);
+    const support = items.find((item) => item.id === currentId);
+    if (!support) return "載せ先が見つかりません。";
+    if (support.kind === "poster") return "ポスターの上には置けません。";
+    currentId = support.supportId;
+  }
+  return null;
+}
+
 export function supportSize(items: Item[], supportId: string | null, desk: Desk) {
   const support = items.find((item) => item.id === supportId);
   return support ? { width: support.width, depth: support.depth } : desk;
@@ -121,6 +140,8 @@ export function itemsCollide(items: Item[], a: Item, b: Item) {
 export function placementIssue(items: Item[], affectedIds: Set<string>, desk: Desk): string | null {
   for (const item of items) {
     if (!affectedIds.has(item.id)) continue;
+    const invalidSupport = supportIssue(items, item.id, item.supportId);
+    if (invalidSupport) return invalidSupport;
     const position = worldPosition(items, item);
     const support = supportFor(items, item);
     if (item.supportId && !support) return "置く場所が見つかりません。";
@@ -144,12 +165,14 @@ export function placementIssue(items: Item[], affectedIds: Set<string>, desk: De
 
 export function canAddItem(items: Item[], item: Item, desk: Desk) {
   if (![item.width, item.depth, item.height, item.z].every(Number.isFinite) || item.width <= 0 || item.depth <= 0 || item.height <= 0 || item.z < 0) return "正の寸法と高さを入力してください。";
-  if (item.supportId && !items.some((candidate) => candidate.id === item.supportId && candidate.kind !== "poster")) return "置く場所が見つかりません。";
+  const invalidSupport = supportIssue(items, item.id, item.supportId);
+  if (invalidSupport) return invalidSupport;
   return placementIssue([...items, item], new Set([item.id]), desk);
 }
 
 /** Find a free starting spot, trying nearby box edges before farther offsets. */
 export function findOpenPlacement(items: Item[], item: Item, desk: Desk): Item | null {
+  if (supportIssue(items, item.id, item.supportId)) return null;
   const bounds = supportSize(items, item.supportId, desk);
   const support = supportFor(items, item);
   const origin = support ? worldPosition(items, support) : { x: 0, y: 0 };
@@ -187,7 +210,7 @@ export function updateItem(items: Item[], id: string, change: Partial<Item>, des
 
 export function placeOn(items: Item[], id: string, supportId: string | null, desk: Desk): Item[] {
   const item = items.find((candidate) => candidate.id === id);
-  if (!item || supportId === id || descendantIds(items, id).has(supportId || "") || items.some((candidate) => candidate.id === supportId && candidate.kind === "poster")) return items;
+  if (!item || supportIssue(items, id, supportId)) return items;
   if (supportId === item.supportId) return items;
   if (!supportId) {
     const position = worldPosition(items, item);
